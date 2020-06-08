@@ -1,0 +1,268 @@
+#include <ros/console.h>
+#include <ros/ros.h>
+#include <rospack/rospack.h>
+
+#include <pcl/common/time.h>
+#include <pcl/io/openni_grabber.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/range_image/range_image.h>
+#include <pcl/visualization/cloud_viewer.h>
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/visualization/range_image_visualizer.h>
+
+#include <iostream>
+
+#include <boost/thread/thread.hpp>
+#include <pcl/common/common_headers.h>
+#include <pcl/console/parse.h>
+#include <pcl/features/normal_3d.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/visualization/pcl_visualizer.h>
+
+/* openCv*/
+#include "opencv2/imgproc/imgproc.hpp"
+#include <cv_bridge/cv_bridge.h>
+#include <image_transport/image_transport.h>
+#include <opencv2/core/core.hpp>
+#include <opencv2/core/eigen.hpp>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/opencv.hpp>
+
+#include <cmath>
+#include <stdio.h> /* printf */
+
+typedef pcl::PointXYZRGBA PointT;
+typedef pcl::PointXYZ PointType;
+
+class RangeImg {
+public:
+  // publicadores
+  RangeImg();
+  void GetRangeImage(cv::Mat range_img_cv);
+  void loop_function();
+  pcl::Grabber *interface = new pcl::OpenNIGrabber();
+
+  // Filter the cloud based on recieved data
+
+private:
+  // rosnode
+  ros::NodeHandle nh;
+  ros::Publisher range_img_pub;
+
+  image_transport::ImageTransport it;
+  sensor_msgs::ImagePtr msg_range_img;
+
+  // declare variables
+
+  // declare functions here
+  // void getImage();
+  // XDeviceInformation *DeviceDescovery();
+};
+
+RangeImg::RangeImg() : it(nh) {
+  range_img_pub = nh.advertise<sensor_msgs::Image>("range_img", 10);
+}
+
+void RangeImg::GetRangeImage(cv::Mat range_img_cv) {
+  msg_range_img = cv_bridge::CvImage{std_msgs::Header(), "mono8", range_img_cv}
+                      .toImageMsg();
+
+  range_img_pub.publish(msg_range_img);
+}
+
+// pcl::visualization::RangeImageVisualizer range_image_widget("Range image");
+
+// From PCL documentation example code
+// void setViewerPose(pcl::visualization::PCLVisualizer &viewer,
+//                    const Eigen::Affine3f &viewer_pose) {
+//   Eigen::Vector3f pos_vector = viewer_pose * Eigen::Vector3f(0, 0, 0);
+//   Eigen::Vector3f look_at_vector =
+//       viewer_pose.rotation() * Eigen::Vector3f(0, 0, 1) + pos_vector;
+//   Eigen::Vector3f up_vector =
+//       viewer_pose.rotation() * Eigen::Vector3f(0, -1, 0);
+//   viewer.pcl::setCameraPose(pos_vector[0], pos_vector[1], pos_vector[2],
+//                             look_at_vector[0], look_at_vector[1],
+//                             look_at_vector[2], up_vector[0], up_vector[1],
+//                             up_vector[2]);
+// }
+
+// Call back method
+void cloud_cb_(const pcl::PointCloud<pcl::PointXYZRGBA>::ConstPtr &cloud)
+
+{
+  static unsigned count = 0;
+  static double last = pcl::getTime();
+  if (++count == 30) {
+    double now = pcl::getTime();
+    std::cout << "distance of center pixel :"
+              << cloud->points[(cloud->width >> 1) * (cloud->height + 1)].z
+              << " mm. Average framerate: "
+              << double(count) / double(now - last) << " Hz" << std::endl;
+    count = 0;
+    last = now;
+  }
+  // PCL viewer //
+  // Display pointcloud:
+  //   viewer.showCloud(cloud);
+
+  // DO USEFUL OPERATIONS HERE
+  // Create a range image and display it
+
+  // We now want to create a range image from the above point cloud, with a 1deg
+  // angular resolution
+  //   float angularResolution =
+  //       (float)(1.0f * (M_PI / 180.0f)); //   1.0 degree in radians
+  //   float maxAngleWidth =
+  //       (float)(360.0f * (M_PI / 180.0f)); // 360.0 degree in radians
+  //   float maxAngleHeight =
+  //       (float)(180.0f * (M_PI / 180.0f)); // 180.0 degree in radians
+
+  float maxAngleWidth = (float)(57.0f * (M_PI / 180.0f));
+  float maxAngleHeight = (float)(43.0f * (M_PI / 180.0f));
+  float angularResolution = (float)(57.0f / 640.0f * (M_PI / 180.0f));
+  Eigen::Affine3f sensorPose = Eigen::Affine3f::Identity();
+
+  pcl::RangeImage::CoordinateFrame coordinate_frame =
+      pcl::RangeImage::CAMERA_FRAME;
+  float noiseLevel = 0.00;
+  float minRange = 0.0f;
+  int borderSize = 1;
+
+  boost::shared_ptr<pcl::RangeImage> range_image_ptr(new pcl::RangeImage);
+  pcl::RangeImage &rangeImage = *range_image_ptr;
+
+  // Range image for live stream from Kinect
+  if (1) {
+    rangeImage.createFromPointCloud(
+        *cloud, angularResolution, maxAngleWidth, maxAngleHeight, sensorPose,
+        coordinate_frame, noiseLevel, minRange, borderSize);
+  }
+
+  // Alternative test - from PCD file on disk
+  else {
+    pcl::PointCloud<PointType>::Ptr point_cloud_ptr(
+        new pcl::PointCloud<PointType>);
+    pcl::PointCloud<PointType> &point_cloud = *point_cloud_ptr;
+
+    // pcd file from http://download.ros.org/data/pcl/
+    if (pcl::io::loadPCDFile("src\\office_scene.pcd", point_cloud) == -1)
+      std::cout << "Cannot load scene file\n";
+    Eigen::Affine3f scene_sensor_pose(Eigen::Affine3f::Identity());
+    scene_sensor_pose =
+        Eigen::Affine3f(Eigen::Translation3f(point_cloud.sensor_origin_[0],
+                                             point_cloud.sensor_origin_[1],
+                                             point_cloud.sensor_origin_[2])) *
+        Eigen::Affine3f(point_cloud.sensor_orientation_);
+
+    rangeImage.createFromPointCloud(
+        point_cloud, angularResolution, maxAngleWidth, maxAngleHeight,
+        scene_sensor_pose, coordinate_frame, noiseLevel, minRange, borderSize);
+  }
+
+  std::cout << rangeImage.points << "\n";
+
+  int cols = rangeImage.width;
+  int rows = rangeImage.height;
+  cv::Mat range_img_cv = cv::Mat(cols, rows, CV_64F, 0.0);
+
+  // range_img_cv.resize(cols, rows);
+  // if (cols != 0 && rows != 0) {
+  //   range_img_cv.resize(cols, rows);
+  //   for (int i = 0; i < (rows); i++) {
+  //     for (int j = 0; j < (cols); j++) {
+  //       range_img_cv.at<float>(i + j) = (rangeImage.getPoint(i, j)).z;
+  //     }
+  //   }
+  // }
+
+  for (size_t i = 0; i < (rangeImage.points.size()); i++) {
+    float z = rangeImage.getPoint(i).z;
+    // std::cout << z << " and " << i << endl;
+    if (std::isnan(z)) {
+      // range_img_cv.at<float>(i) = 0.0f;
+      // std::cout << "is not a number" << endl;
+    } else {
+      range_img_cv.at<float>(i) = z;
+      // std::cout << "is a number" << endl;
+    }
+  }
+  RangeImg RangeImg;
+  RangeImg.GetRangeImage(range_img_cv);
+
+  // std::cout << range_img_cv << "\n";
+
+  // float min_range;
+  // float max_range;
+  // range_image->getMinMaxRanges(min_range, max_range);
+
+  // for (int i = 0; i < (rows); i++):
+  //   for (int j = 0; j < (cols); j++):
+  //     ImageOpenCVRange.at<float>(i + j) = (range_image->getPoint(i, j)).z;
+
+  // for (size_t i = 0; i < (range_image->points.size()); i++) {
+  //   z = range_image->getPoint(i).z;
+  //   if (_isnan(z))
+  //     ImageOpenCVRange.at<float>(i) = 0;
+  //   else
+  //     ImageOpenCVRange.at<float>(i) = z;
+
+  //   std::cout << i << ' ' << ImageOpenCVRange.at<float>(i) << ' ' <<
+  //   std::endl;
+  // }
+
+  // showRangeImage seems to take a very long time (infinite loop?). Hence
+  // commented out range_image_widget.showRangeImage(rangeImage);
+
+  // range_image_widget.showRangeImage(rangeImage);
+  // range_image_widget.spinOnce(); // This line was missing
+
+  //   // viewer3D gives error
+  //   viewer3D.setBackgroundColor(1, 1, 1);
+  //   pcl::visualization::PointCloudColorHandlerCustom<pcl::PointWithRange>
+  //       range_image_color_handler(range_image_ptr, 0, 0, 0);
+  //   viewer3D.addPointCloud(range_image_ptr, range_image_color_handler,
+  //                          "range image");
+  //   viewer3D.setPointCloudRenderingProperties(
+  //       pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 1, "range image");
+  //   viewer3D.initCameraParameters();
+  //   setViewerPose(viewer3D, rangeImage.getTransformationToWorldSystem());
+}
+
+void RangeImg::loop_function() {
+
+  // make callback function from member function
+  boost::function<void(const pcl::PointCloud<pcl::PointXYZRGBA>::ConstPtr &)>
+      f = boost::bind(&cloud_cb_, _1);
+
+  // connect callback function for desired signal. In this case its a point
+  // cloud with color values
+  boost::signals2::connection c = interface->registerCallback(f);
+
+  // start receiving point clouds
+  interface->start();
+}
+
+int main(int argc, char **argv) {
+  ros::init(argc, argv, "RangeImg");
+  RangeImg reconstruct;
+  // create a new grabber for OpenNI devices
+
+  ros::Rate rate(30);
+  while (ros::ok() && true) {
+    reconstruct.loop_function();
+    boost::this_thread::sleep(boost::posix_time::seconds(1));
+    ros::spinOnce();
+    rate.sleep();
+  }
+  // wait until user quits program with Ctrl-C, but no busy-waiting -> sleep
+  // (1);
+  // while (true)
+  //   boost::this_thread::sleep(boost::posix_time::seconds(1));
+
+  // stop the grabber
+  reconstruct.interface->stop();
+
+  return (0);
+}
